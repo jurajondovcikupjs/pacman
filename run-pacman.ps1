@@ -1,0 +1,1 @@
+clang pacman.c -o pacman ; if ($?) { conhost.exe ".\pacman.exe" }
