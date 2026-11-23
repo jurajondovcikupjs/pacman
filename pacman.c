@@ -15,7 +15,8 @@
 #define DOT '.'
 #define BIG_DOT 'O'
 #define PACMAN 'P'
-#define GHOST 'G'
+
+char ghostTextures[4] = { 'B', 'P', 'I', 'C' };
 
 int level = 1;
 
@@ -253,35 +254,69 @@ int decideGhostMove(struct Game* game, int ghostIndex, int targetX, int targetY)
     return nextMove;
 }
 
-int moveBlinky(struct Game* game) {
-    int nextMove = decideGhostMove(game, 0, game->pacman.x, game->pacman.y);
-
+void moveGhostToTarget(struct Game* game, int ghostIndex, int targetX, int targetY) {
+    int nextMove = decideGhostMove(game, ghostIndex, targetX, targetY);
     if (nextMove != -1) {
-        int nextX = game->ghosts[0].x + (nextMove == 1 ? 1 : (nextMove == 3 ? -1 : 0));
-        int nextY = game->ghosts[0].y + (nextMove == 2 ? 1 : (nextMove == 0 ? -1 : 0));
+        int nextX = game->ghosts[ghostIndex].x + (nextMove == 1 ? 1 : (nextMove == 3 ? -1 : 0));
+        int nextY = game->ghosts[ghostIndex].y + (nextMove == 2 ? 1 : (nextMove == 0 ? -1 : 0));
         if (nextY >= 0 && nextY < MAP_HEIGHT && nextX >= 0 && nextX < MAP_WIDTH) {
-            char targetTile = game->map[nextY][nextX];
-            if (targetTile != WALL) {
-                game->ghosts[0].prevX = game->ghosts[0].x;
-                game->ghosts[0].prevY = game->ghosts[0].y;
-                game->ghosts[0].x = nextX;
-                game->ghosts[0].y = nextY;
+            if (game->map[nextY][nextX] != WALL) {
+                game->ghosts[ghostIndex].prevX = game->ghosts[ghostIndex].x;
+                game->ghosts[ghostIndex].prevY = game->ghosts[ghostIndex].y;
+                game->ghosts[ghostIndex].x = nextX;
+                game->ghosts[ghostIndex].y = nextY;
             }
         }
     }
-    return nextMove;
+}
+
+void moveBlinky(struct Game* game) {
+    int targetX = game->pacman.x;
+    int targetY = game->pacman.y;
+    moveGhostToTarget(game, 0, targetX, targetY);
 }
 
 void movePinky(struct Game* game) {
+    int targetX = game->pacman.x;
+    int targetY = game->pacman.y;
 
+    if (game->pacman.direction == 'w') {
+        targetY -= 4;
+        // Fun arcade trivia: the original 1980 game had an overflow bug
+        // that also shifted targetX -= 4 when facing Up!
+    } else if (game->pacman.direction == 's') {
+        targetY += 4;
+    } else if (game->pacman.direction == 'a') {
+        targetX -= 4;
+    } else if (game->pacman.direction == 'd') {
+        targetX += 4;
+    }
+
+    moveGhostToTarget(game, 1, targetX, targetY);
 }
 
 void moveInky(struct Game* game) {
+    int pivotX = game->pacman.x;
+    int pivotY = game->pacman.y;
 
+    if (game->pacman.direction == 'w') pivotY -= 2;
+    else if (game->pacman.direction == 's') pivotY += 2;
+    else if (game->pacman.direction == 'a') pivotX -= 2;
+    else if (game->pacman.direction == 'd') pivotX += 2;
+
+    int targetX = pivotX + (pivotX - game->ghosts[0].x);
+    int targetY = pivotY + (pivotY - game->ghosts[0].y);
+
+    moveGhostToTarget(game, 2, targetX, targetY);
 }
 
 void moveClyde(struct Game* game) {
-
+    int dist = calculateDistance(game->ghosts[3].x, game->ghosts[3].y, game->pacman.x, game->pacman.y);
+    if (dist > 8) {
+        moveGhostToTarget(game, 3, game->pacman.x, game->pacman.y);
+    } else {
+        moveGhostToTarget(game, 3, 0, MAP_HEIGHT - 1);
+    }
 }
 
 //constructs the map for the game
@@ -332,7 +367,7 @@ void startNewGame(struct Game* game) {
     game->score = 0;
     game->pacman = (struct Pacman){ .x = 13, .y = 23, .lives = 3, .texture = PACMAN, .direction = 0};
     for (int i = 0; i < 4; i++) {
-        game->ghosts[i] = (struct Ghost){ .id = i, .x = 12 + i, .y = 12, .isChasing = 1, .texture = GHOST, .direction = 0, .prevX = -1, .prevY = -1  };
+        game->ghosts[i] = (struct Ghost){ .id = i, .x = 12 + i, .y = 12, .isChasing = 1, .texture = ghostTextures[i], .direction = 0, .prevX = -1, .prevY = -1  };
     }
 }
 
@@ -369,6 +404,14 @@ char getTileAt(struct Game* game, int x, int y) {
     return game->map[y][x];
 }
 
+bool checkGhostCollision(struct Game* game) {
+    for (int i = 0; i < 4; i++) {
+        if (game->ghosts[i].x == game->pacman.x && game->ghosts[i].y == game->pacman.y) {
+            return true;
+        }
+    }
+    return false;
+}
 int main() {
     struct Game g = { 0 };
     constructMap(&g);
@@ -405,6 +448,15 @@ int main() {
             int oldBlinkyX = g.ghosts[0].x;
             int oldBlinkyY = g.ghosts[0].y;
 
+            int oldPinkyX = g.ghosts[1].x;
+            int oldPinkyY = g.ghosts[1].y;
+
+            int oldInkyX = g.ghosts[2].x;
+            int oldInkyY = g.ghosts[2].y;
+
+            int oldClydeX = g.ghosts[3].x;
+            int oldClydeY = g.ghosts[3].y;
+
             int oldScore = g.score;
             char oldDirection = g.pacman.direction;
 
@@ -428,6 +480,41 @@ int main() {
                 fflush(stdout);
             }
 
+            // update Pinky
+            movePinky(&g);
+            if (oldPinkyX != g.ghosts[1].x || oldPinkyY != g.ghosts[1].y) {
+                setCursor(oldPinkyX, oldPinkyY);
+                printf("%c", getTileAt(&g, oldPinkyX, oldPinkyY));
+
+                setCursor(g.ghosts[1].x, g.ghosts[1].y);
+                printf("%c", g.ghosts[1].texture);
+
+                fflush(stdout);
+            }
+
+            //update Inky
+            moveInky(&g);
+            if (oldInkyX != g.ghosts[2].x || oldInkyY != g.ghosts[2].y) {
+                setCursor(oldInkyX, oldInkyY);
+                printf("%c", getTileAt(&g, oldInkyX, oldInkyY));
+
+                setCursor(g.ghosts[2].x, g.ghosts[2].y);
+                printf("%c", g.ghosts[2].texture);
+
+                fflush(stdout);
+            }
+
+            //update Clyde
+            moveClyde(&g);
+            if (oldClydeX != g.ghosts[3].x || oldClydeY != g.ghosts[3].y) {
+                setCursor(oldClydeX, oldClydeY);
+                printf("%c", getTileAt(&g, oldClydeX, oldClydeY));
+
+                setCursor(g.ghosts[3].x, g.ghosts[3].y);
+                printf("%c", g.ghosts[3].texture);
+
+                fflush(stdout);
+            }
 
             //update the cursor if pacman moved
             if (oldPacmanX != g.pacman.x || oldPacmanY != g.pacman.y) {
