@@ -14,17 +14,22 @@
 #define POWER_UP_SPAWN_INTERVAL 15000
 #define POWER_UP_DURATION 10000
 
+#ifndef CONSOLE_FONT_HEIGHT
+#define CONSOLE_FONT_HEIGHT 18
+#endif
+
 #define WALL '#'
 #define EMPTY ' '
 #define DOT '.'
 #define BIG_DOT 'O'
 #define PACMAN 'P'
 #define POWER_UP '^'
+#define SHELLS 238
 
 char ghostTextures[4] = { 'B', 'P', 'I', 'C' };
 
 int level = 1;
-int shells = 238;
+int shells = SHELLS;
 int playing = 1;
 
 // Pacman object
@@ -97,7 +102,7 @@ void clearTerminal() {
 }
 
 // Sets the console size, title, and window icon.
-void setupConsole(int width, int height) {
+void setupConsole(int width, int height, int fontSize) {
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
 
     SMALL_RECT minRect = { 0, 0, 1, 1 };
@@ -131,6 +136,16 @@ void setupConsole(int width, int height) {
         if (smallIcon != NULL) SendMessage(window, WM_SETICON, ICON_SMALL, (LPARAM)smallIcon);
         if (bigIcon != NULL) SendMessage(window, WM_SETICON, ICON_BIG, (LPARAM)bigIcon);
     }
+
+    // Make the game text larger.
+    CONSOLE_FONT_INFOEX font = { 0 };
+    font.cbSize = sizeof(font);
+    font.dwFontSize.Y = (SHORT)fontSize;
+    font.FontWeight = FW_NORMAL;
+    wcscpy(font.FaceName, L"Consolas");
+
+    SetCurrentConsoleFontEx(hOut, FALSE, &font);
+
 }
 
 // Moves the console cursor to a map position.
@@ -904,10 +919,10 @@ void updatePowerUps(struct Game* game) {
 }
 
 // Runs menus, the game loop, level changes, and the end screen.
-int main() {
+int main(int argc, char* argv[]) {
     srand((unsigned int)time(NULL)); // Seed the random number generator
     struct Game g = { 0 }; // Initialize the game state
-    setupConsole(40, MAP_HEIGHT + 4); // Set up the console
+    setupConsole(40, MAP_HEIGHT + 4, CONSOLE_FONT_HEIGHT); // Set up the console
     clearTerminal();
     setCursorVisibility(false);
     showLogo(&g); // Show the logo
@@ -931,7 +946,7 @@ int main() {
     while (running) {
         if (!loadedGame) {
             level = 1;
-            shells = 238;
+            shells = SHELLS;
             playing = 1;
             constructMap(&g);
             startNewGame(&g);
@@ -955,7 +970,7 @@ int main() {
                     g.powerUps[i] = (struct PowerUp){ .id = i, .active = false };
                     g.powerUpExpires[i] = 0;
                 }
-                shells = 238;
+                shells = SHELLS;
                 resetPositions(&g);
                 g.nextPowerUpSpawn = GetTickCount64() + POWER_UP_SPAWN_INTERVAL;
                 pacmanMoveTimer = 0;
