@@ -1,3 +1,2 @@
 @echo off
-echo Building and running PaCman...
 clang pacman.c -o pacman.exe && conhost.exe "%~dp0pacman.exe"
