@@ -24,7 +24,7 @@
 #define BIG_DOT 'O'
 #define PACMAN 'P'
 #define POWER_UP '^'
-#define SHELLS 238
+#define SHELLS 240
 
 char ghostTextures[4] = { 'B', 'P', 'I', 'C' };
 
@@ -65,6 +65,8 @@ enum PowerUpType {
     FREEZE_GHOSTS,
     DOUBLE_SPEED,
     REPEL_GHOSTS,
+    SHIELD,
+    DOUBLE_SCORE,
     POWER_UP_COUNT
 };
 
@@ -145,7 +147,16 @@ void setupConsole(int width, int height, int fontSize) {
     wcscpy(font.FaceName, L"Consolas");
 
     SetCurrentConsoleFontEx(hOut, FALSE, &font);
+}
 
+// Enables console colors by setting the virtual terminal processing mode.
+void enableConsoleColors(void) {
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+
+    if (GetConsoleMode(output, &mode)) {
+        SetConsoleMode(output, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
 }
 
 // Moves the console cursor to a map position.
@@ -200,7 +211,7 @@ void showLogo(struct Game* game) {
     };
 
     for (int i = 0; i < 31; i++) {
-        printf("%s\n", pacman_art[i]);
+        printf("\x1b[93m%s\x1b[0m\n", pacman_art[i]);
     }
     Sleep(2000);
     clearTerminal();
@@ -464,13 +475,14 @@ void movePacman(struct Game* game, char m) {
     int nextX = game->pacman.x;
     int nextY = game->pacman.y;
 
+    // Check if the move is valid - not a wall
     if (m == 'w' && nextY > 0 && game->map[nextY - 1][nextX] != WALL) nextY--;
     else if (m == 's' && nextY < MAP_HEIGHT - 1 && game->map[nextY + 1][nextX] != WALL) nextY++;
     else if (m == 'a' && nextX > 0 && game->map[nextY][nextX - 1] != WALL) nextX--;
     else if (m == 'd' && nextX < MAP_WIDTH - 1 && game->map[nextY][nextX + 1] != WALL) nextX++;
     else return;
 
-    // checks for valid move
+    // Check if the next move is valid
     if (nextY >= 0 && nextY < MAP_HEIGHT && nextX >= 0 && nextX < MAP_WIDTH) {
         char targetTile = game->map[nextY][nextX];
         if (targetTile != WALL) {
@@ -491,12 +503,15 @@ void movePacman(struct Game* game, char m) {
                 }
             }
 
+            // Check if the tile has a power-up or dot to collect
             if (targetTile == DOT) {
-                game->score += (10 * level);
+                game->score += (10 * level) *
+                    (game->powerUpExpires[DOUBLE_SCORE] > GetTickCount64() ? 2 : 1);
                 shells--;
                 game->map[nextY][nextX] = EMPTY;
             } else if (targetTile == BIG_DOT) {
-                game->score += (50 * level);
+                game->score += (50 * level) *
+                    (game->powerUpExpires[DOUBLE_SCORE] > GetTickCount64() ? 2 : 1);
                 game->map[nextY][nextX] = EMPTY;
                 applyPowerUp(game, HUNT_GHOSTS); // Walking on 'O' lets Pac-Man chase ghosts
             }
@@ -744,29 +759,94 @@ void startNewGame(struct Game* game) {
     game->nextPowerUpSpawn = GetTickCount64() + POWER_UP_SPAWN_INTERVAL;
 }
 
-// Draws the map, Pac-Man, ghosts, score, and lives.
+// Draws one visible tile with the color belonging to its game entity.
+void printTileAt(struct Game* game, int x, int y) {
+    static const int ghostColors[4] = { 31, 95, 96, 33 }; // red, pink, cyan, orange/yellow
+    char tile = game->map[y][x];
+    int color = 0;
+
+    if (game->pacman.x == x && game->pacman.y == y) {
+        tile = game->pacman.texture;
+        color = 93; // bright yellow Pac-Man
+    } else {
+        for (int i = 0; i < 4; i++) {
+            if (game->ghosts[i].x == x && game->ghosts[i].y == y) {
+                tile = game->ghosts[i].texture;
+                color = game->ghosts[i].isChasing ? ghostColors[i] : 94; // frightened ghosts are blue
+                break;
+            }
+        }
+
+        if (color == 0 && (tile == POWER_UP || tile == BIG_DOT)) {
+            color = 92; // bright green power-ups and power pellets
+        }
+    }
+
+    if (color != 0) printf("\x1b[%dm%c\x1b[0m", color, tile);
+    else printf("%c", tile);
+}
+
+// Shows the score and currently active power-ups below the map.
+void printHud(struct Game* game) {
+    static const char* powerUpNames[POWER_UP_COUNT] = {
+        "Hunt", "Freeze", "Speed", "Repel", "Shield", "2x Score"
+    };
+    char scoreLine[64];
+    char activeLine[96] = "Active:";
+    char firstLine[41] = { 0 };
+    char secondLine[41] = { 0 };
+    size_t used = strlen(activeLine);
+    int activeCount = 0;
+    ULONGLONG now = GetTickCount64();
+
+    snprintf(scoreLine, sizeof(scoreLine), "Score: %d   Lives: %d", game->score, game->pacman.lives);
+    setCursor(0, MAP_HEIGHT);
+    printf("%-40.40s", scoreLine);
+
+    for (int i = 0; i < POWER_UP_COUNT; i++) {
+        if (game->powerUpExpires[i] > now) {
+            int written = snprintf(activeLine + used, sizeof(activeLine) - used,
+                "%s%s", activeCount ? ", " : " ", powerUpNames[i]);
+            if (written < 0 || (size_t)written >= sizeof(activeLine) - used) break;
+            used += (size_t)written;
+            activeCount++;
+        }
+    }
+    if (!activeCount) {
+        strcpy(activeLine, "Active: none");
+    }
+
+    size_t activeLength = strlen(activeLine);
+    size_t split = activeLength > 40 ? 39 : activeLength;
+    if (activeLength > 40) {
+        while (split > 0 && activeLine[split] != ' ') split--;
+        if (split == 0) split = 39;
+        memcpy(firstLine, activeLine, split);
+        firstLine[split] = '\0';
+        const char* remainder = activeLine + split;
+        while (*remainder == ' ') remainder++;
+        snprintf(secondLine, sizeof(secondLine), "%s", remainder);
+    } else {
+        snprintf(firstLine, sizeof(firstLine), "%s", activeLine);
+    }
+
+    setCursor(0, MAP_HEIGHT + 1);
+    printf("%-40.40s", firstLine);
+    setCursor(0, MAP_HEIGHT + 2);
+    printf("%-40.40s", secondLine);
+    fflush(stdout);
+}
+
+// Draws the map, Pac-Man, ghosts, score, lives, and active power-ups.
 void printMap(struct Game* game) {
     setCursor(0, 0);
     for (int i = 0; i < MAP_HEIGHT; i++) {
         for (int j = 0; j < MAP_WIDTH; j++) {
-            if (i == game->pacman.y && j == game->pacman.x) {
-                printf("%c", game->pacman.texture);
-            } else if (i == game->ghosts[0].y && j == game->ghosts[0].x) {
-                printf("%c", game->ghosts[0].texture);
-            } else if (i == game->ghosts[1].y && j == game->ghosts[1].x) {
-                printf("%c", game->ghosts[1].texture);
-            } else if (i == game->ghosts[2].y && j == game->ghosts[2].x) {
-                printf("%c", game->ghosts[2].texture);
-            } else if (i == game->ghosts[3].y && j == game->ghosts[3].x) {
-                printf("%c", game->ghosts[3].texture);
-            } else {
-                printf("%c", game->map[i][j]);
-            }
+            printTileAt(game, j, i);
         }
         printf("\n");
     }
-    printf("Score: %d   Lives: %d", game->score, game->pacman.lives);
-    fflush(stdout);
+    printHud(game);
 }
 
 // Returns the visible tile at a map position.
@@ -782,10 +862,29 @@ char getTileAt(struct Game* game, int x, int y) {
 bool checkGhostCollision(struct Game* game) {
     for (int i = 0; i < 4; i++) {
         if (game->ghosts[i].x == game->pacman.x && game->ghosts[i].y == game->pacman.y) {
-            if (!game->pacman.isChasing) return true;
+            if (!game->pacman.isChasing) {
+                if (game->powerUpExpires[SHIELD] > GetTickCount64()) {
+                    int pacmanX = game->pacman.x;
+                    int pacmanY = game->pacman.y;
+                    game->powerUpExpires[SHIELD] = 0;
+                    game->ghosts[i].x = 12 + i;
+                    game->ghosts[i].y = 12;
+                    game->ghosts[i].prevX = -1;
+                    game->ghosts[i].prevY = -1;
+                    game->ghosts[i].frozenUntil = GetTickCount64() + 1000;
+                    setCursor(pacmanX, pacmanY);
+                    printTileAt(game, pacmanX, pacmanY);
+                    setCursor(game->ghosts[i].x, game->ghosts[i].y);
+                    printTileAt(game, game->ghosts[i].x, game->ghosts[i].y);
+                    printHud(game);
+                    return false;
+                }
+                return true;
+            }
 
             // Eat ghost: award points, return to spawn, and freeze for 1 second (1000 ms)
-            game->score += 200 * level;
+            game->score += 200 * level *
+                (game->powerUpExpires[DOUBLE_SCORE] > GetTickCount64() ? 2 : 1);
             game->ghosts[i].x = 12 + i;
             game->ghosts[i].y = 12;
             game->ghosts[i].prevX = -1;
@@ -793,10 +892,8 @@ bool checkGhostCollision(struct Game* game) {
             game->ghosts[i].frozenUntil = GetTickCount64() + 1000;
 
             setCursor(game->ghosts[i].x, game->ghosts[i].y);
-            printf("%c", game->ghosts[i].texture);
-            setCursor(0, MAP_HEIGHT);
-            printf("Score: %d   Lives: %d   ", game->score, game->pacman.lives);
-            fflush(stdout);
+            printTileAt(game, game->ghosts[i].x, game->ghosts[i].y);
+            printHud(game);
         }
     }
     return false;
@@ -813,7 +910,7 @@ void spawnPowerUp(struct Game* game) {
         int oldY = game->powerUps[type].y;
         game->map[oldY][oldX] = game->powerUps[type].underlyingTile;
         setCursor(oldX, oldY);
-        printf("%c", getTileAt(game, oldX, oldY));
+        printTileAt(game, oldX, oldY);
     }
 
     for (int attempt = 0; attempt < 200; attempt++) {
@@ -834,7 +931,7 @@ void spawnPowerUp(struct Game* game) {
 
             game->map[y][x] = POWER_UP;
             setCursor(x, y);
-            printf("%c", POWER_UP);
+            printTileAt(game, x, y);
             fflush(stdout);
             return;
         }
@@ -854,7 +951,7 @@ void applyPowerUp(struct Game* game, int type) {
             game->ghosts[i].prevX = -1; // Allow immediate 180-degree turn
             game->ghosts[i].prevY = -1;
             setCursor(game->ghosts[i].x, game->ghosts[i].y);
-            printf("%c", game->ghosts[i].texture);
+            printTileAt(game, game->ghosts[i].x, game->ghosts[i].y);
         }
         fflush(stdout);
     } else if (type == FREEZE_GHOSTS) {
@@ -877,20 +974,23 @@ void updatePowerUps(struct Game* game) {
     ULONGLONG now = GetTickCount64();
 
     // 1. Spawn a new power-up every 15 seconds
+    bool hudChanged = false;
+
     if (now >= game->nextPowerUpSpawn) {
         spawnPowerUp(game);
         game->nextPowerUpSpawn = now + POWER_UP_SPAWN_INTERVAL;
     }
 
-    // 2. Check if any active power-up effect has expired
+    // Check if any active power-up effect has expired
     if (game->powerUpExpires[HUNT_GHOSTS] > 0 && now >= game->powerUpExpires[HUNT_GHOSTS]) {
         game->powerUpExpires[HUNT_GHOSTS] = 0;
+        hudChanged = true;
         game->pacman.isChasing = 0;
         for (int i = 0; i < 4; i++) {
             game->ghosts[i].isChasing = 1;
             game->ghosts[i].texture = ghostTextures[i];
             setCursor(game->ghosts[i].x, game->ghosts[i].y);
-            printf("%c", game->ghosts[i].texture);
+            printTileAt(game, game->ghosts[i].x, game->ghosts[i].y);
         }
         fflush(stdout);
     }
@@ -898,6 +998,7 @@ void updatePowerUps(struct Game* game) {
     // Check if the freeze power-up has expired and remove the effect
     if (game->powerUpExpires[FREEZE_GHOSTS] > 0 && now >= game->powerUpExpires[FREEZE_GHOSTS]) {
         game->powerUpExpires[FREEZE_GHOSTS] = 0;
+        hudChanged = true;
         for (int i = 0; i < 4; i++) {
             game->ghosts[i].frozenGhost = 0;
         }
@@ -906,23 +1007,38 @@ void updatePowerUps(struct Game* game) {
     // Check if the double speed power-up has expired and remove the effect
     if (game->powerUpExpires[DOUBLE_SPEED] > 0 && now >= game->powerUpExpires[DOUBLE_SPEED]) {
         game->powerUpExpires[DOUBLE_SPEED] = 0;
+        hudChanged = true;
         game->pacman.speed = 1;
     }
 
     // Check if the repel power-up has expired and remove the effect
     if (game->powerUpExpires[REPEL_GHOSTS] > 0 && now >= game->powerUpExpires[REPEL_GHOSTS]) {
         game->powerUpExpires[REPEL_GHOSTS] = 0;
+        hudChanged = true;
         for (int i = 0; i < 4; i++) {
             game->ghosts[i].repelledGhosts = 0;
         }
     }
+
+    if (game->powerUpExpires[SHIELD] > 0 && now >= game->powerUpExpires[SHIELD]) {
+        game->powerUpExpires[SHIELD] = 0;
+        hudChanged = true;
+    }
+
+    if (game->powerUpExpires[DOUBLE_SCORE] > 0 && now >= game->powerUpExpires[DOUBLE_SCORE]) {
+        game->powerUpExpires[DOUBLE_SCORE] = 0;
+        hudChanged = true;
+    }
+
+    if (hudChanged) printHud(game);
 }
 
 // Runs menus, the game loop, level changes, and the end screen.
 int main(int argc, char* argv[]) {
     srand((unsigned int)time(NULL)); // Seed the random number generator
     struct Game g = { 0 }; // Initialize the game state
-    setupConsole(40, MAP_HEIGHT + 4, CONSOLE_FONT_HEIGHT); // Set up the console
+    setupConsole(45, MAP_HEIGHT + 6, CONSOLE_FONT_HEIGHT); // Set up the console with room around the map
+    enableConsoleColors();
     clearTerminal();
     setCursorVisibility(false);
     showLogo(&g); // Show the logo
@@ -1029,14 +1145,12 @@ int main(int argc, char* argv[]) {
 
                 if (oldPacmanX != g.pacman.x || oldPacmanY != g.pacman.y) {
                     setCursor(oldPacmanX, oldPacmanY);
-                    printf("%c", getTileAt(&g, oldPacmanX, oldPacmanY));
+                    printTileAt(&g, oldPacmanX, oldPacmanY);
 
                     setCursor(g.pacman.x, g.pacman.y);
-                    printf("%c", g.pacman.texture);
+                    printTileAt(&g, g.pacman.x, g.pacman.y);
 
-                    setCursor(0, MAP_HEIGHT);
-                    printf("Score: %d   Lives: %d   ", g.score, g.pacman.lives);
-                    fflush(stdout);
+                    printHud(&g);
                 }
 
                 if (checkGhostCollision(&g)) {
@@ -1062,10 +1176,10 @@ int main(int argc, char* argv[]) {
                 for (int i = 0; i < 4; i++) {
                     if (oldGhostX[i] != g.ghosts[i].x || oldGhostY[i] != g.ghosts[i].y) {
                         setCursor(oldGhostX[i], oldGhostY[i]);
-                        printf("%c", getTileAt(&g, oldGhostX[i], oldGhostY[i]));
+                        printTileAt(&g, oldGhostX[i], oldGhostY[i]);
 
                         setCursor(g.ghosts[i].x, g.ghosts[i].y);
-                        printf("%c", g.ghosts[i].texture);
+                        printTileAt(&g, g.ghosts[i].x, g.ghosts[i].y);
                     }
                 }
 
