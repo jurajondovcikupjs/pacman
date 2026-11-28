@@ -1,13 +1,19 @@
 # PaCman
 
 ## Run the game
+Standart command line window is enough, but not good enough. That's why `conhost.exe` is used.
 
 1. Make sure `pacman.exe` is in this folder.
-2. Double click the pacman.exe file to launch the game.
+2. Run:
+```powershell
+.\run.ps1
+```
+to launch the game using Windows' configured console host.
 
 ## Build and run
 
-To compile the game and then launch it, run:
+The build script prompts for a console font size from 8 to 32. Press Enter to use the default size of 18 (which is the console's default size, 1080p screen).
+To compile the game and then launch it in `conhost.exe`, run:
 
 ```powershell
 .\build.ps1
@@ -15,7 +21,7 @@ To compile the game and then launch it, run:
 
 ## Controls
 
-Use W/A/S/D or the arrow keys to move. Press Q to quit.
+Use W/A/S/D or the arrow keys to move. Press P to pause or resume, F to save, and Q to quit.
 Use F to save the game. Use L to load a saved game.
 
 ## Powerups
